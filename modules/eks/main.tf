@@ -37,11 +37,10 @@ module "eks" {
     system = {
       name           = "system"
       # Multiple instance types to reduce spot eviction risk.
-      # All arm64, 2 vCPU — same vCPU count required for predictable pod scheduling in MNG.
+      # All arm64, 2 vCPU / 4 GB — identical spec required for predictable pod scheduling.
       # EKS MNG picks the cheapest available from this pool.
       instance_types = [
-        "t4g.small",  # 2 vCPU, 2 GB — baseline, cheapest
-        "t4g.medium", # 2 vCPU, 4 GB — same family, more RAM headroom
+        "t4g.medium", # 2 vCPU, 4 GB — Graviton2 burstable, baseline
         "c6g.large",  # 2 vCPU, 4 GB — Graviton2 compute-optimised
         "c7g.large",  # 2 vCPU, 4 GB — Graviton3 compute-optimised
       ]
