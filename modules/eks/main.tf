@@ -37,14 +37,13 @@ module "eks" {
     system = {
       name           = "system"
       # Multiple instance types to reduce spot eviction risk.
-      # All arm64, ~2 vCPU / 2-4 GB — sized for system pods (Karpenter, CoreDNS, Traefik).
+      # All arm64, 2 vCPU — same vCPU count required for predictable pod scheduling in MNG.
       # EKS MNG picks the cheapest available from this pool.
       instance_types = [
-        "t4g.small",   # 2 vCPU, 2 GB — baseline, cheapest
-        "t4g.medium",  # 2 vCPU, 4 GB — same family, more RAM headroom
-        "m6g.medium",  # 1 vCPU, 4 GB — Graviton2, good RAM/cost ratio
-        "m7g.medium",  # 1 vCPU, 4 GB — Graviton3, slightly better perf than m6g
-        "c6g.medium",  # 1 vCPU, 2 GB — compute-optimised fallback
+        "t4g.small",  # 2 vCPU, 2 GB — baseline, cheapest
+        "t4g.medium", # 2 vCPU, 4 GB — same family, more RAM headroom
+        "c6g.large",  # 2 vCPU, 4 GB — Graviton2 compute-optimised
+        "c7g.large",  # 2 vCPU, 4 GB — Graviton3 compute-optimised
       ]
       capacity_type  = "SPOT"
       ami_type       = "AL2023_ARM_64_STANDARD"
