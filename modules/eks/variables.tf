@@ -2,9 +2,9 @@ variable "cluster_name" {
   type = string
 }
 
-variable "cluster_version" {
+variable "kubernetes_version" {
   type    = string
-  default = "1.32"
+  default = "1.33"
 }
 
 variable "vpc_id" {
