@@ -9,7 +9,7 @@
                     │   Public Subnet    │
                     │                   │
                     │  ┌─────────────┐  │
-                    │  │     ALB     │  │
+                    │  │     NLB     │  │
                     │  └──────┬──────┘  │
                     │         │         │
                     │  ┌──────▼──────┐  │
@@ -28,7 +28,7 @@
                     │  │             │  │
                     │  │ - Karpenter │  │
                     │  │ - CoreDNS   │  │
-                    │  │ - ALB ctrl  │  │
+                    │  │ - Traefik   │  │
                     │  └─────────────┘  │
                     │                   │
                     │  ┌─────────────┐  │
@@ -103,7 +103,7 @@ The fck-nat instance runs on spot, meaning AWS can reclaim it with a 2-minute no
 
 ### System node: spot t4g.small via managed node group
 
-Karpenter, CoreDNS, and the AWS Load Balancer Controller run on a single `t4g.small` spot instance managed by an **EKS Managed Node Group (MNG)**, not on Fargate and not provisioned by Karpenter.
+Karpenter, CoreDNS, and Traefik run on a single `t4g.small` spot instance managed by an **EKS Managed Node Group (MNG)**, not on Fargate and not provisioned by Karpenter.
 
 **Why not Fargate for system pods?**
 
@@ -124,6 +124,40 @@ During the ~2 minutes a replacement system node is booting, existing workload po
 All application workloads run on spot instances provisioned by Karpenter. Karpenter selects the cheapest available instance type across a broad pool of Graviton (arm64) instance families, maximizing the probability of getting spot capacity and minimizing cost.
 
 Spot instances are ~60–90% cheaper than on-demand. Combined with Graviton's ~20% price-performance advantage over x86, this is the single biggest cost lever in the architecture.
+
+---
+
+### Ingress: Traefik + single NLB
+
+Rather than using the AWS Load Balancer Controller with per-Ingress ALBs, all HTTP/HTTPS traffic enters the cluster through a single **AWS Network Load Balancer** pointing to **Traefik** running as a DaemonSet (or Deployment) on the system node.
+
+```
+Internet → NLB (L4) → Traefik pod (L7) → Services
+```
+
+**Why not ALB?**
+
+An ALB costs ~$18/mo minimum per load balancer. The AWS Load Balancer Controller provisions one ALB per `Ingress` resource by default — three services means three ALBs means ~$54/mo in load balancers alone. Sharing via `IngressGroup` helps but still has an ~$18/mo floor.
+
+**Why NLB + Traefik?**
+
+An NLB costs ~$10/mo minimum (cheaper than ALB) and is a single fixed entry point regardless of how many services or routes you add. Traefik handles all L7 routing — host-based routing, path-based routing, TLS termination, middleware — entirely inside the cluster. Adding a new service costs $0 in AWS infrastructure.
+
+**Why Traefik over Nginx?**
+
+Both work. Traefik has better Kubernetes-native integration via `IngressRoute` CRDs, built-in Let's Encrypt support, and a useful dashboard. For a cost-showcase repo it also demonstrates that the ingress layer can be entirely self-managed without AWS-specific controllers.
+
+**Cost comparison:**
+
+| Approach | LB cost/mo | Scales with services? |
+|---|---|---|
+| ALB per Ingress (default) | ~$18 per service | Yes — gets expensive fast |
+| ALB with IngressGroup | ~$18 flat | No |
+| **NLB + Traefik** | **~$10 flat** | **No — one NLB always** |
+
+**Traefik on the system node:**
+
+Traefik runs on the system MNG node alongside Karpenter and CoreDNS. It is a lightweight process and fits comfortably within the `t4g.small` resource budget. This means Traefik has the same self-healing behaviour as the rest of the system node — if the spot node is evicted, the MNG ASG replaces it in ~2 minutes and Traefik comes back automatically.
 
 ---
 
@@ -180,10 +214,10 @@ Estimates based on `eu-west-1` (Ireland) pricing, single AZ, light workload.
 | fck-nat (t4g.nano spot) | Spot EC2 | ~$1–2 |
 | System node (t4g.small spot, MNG) | Spot EC2 | ~$4–5 |
 | Workload nodes (Karpenter spot) | Spot EC2 | ~$10–30 (varies) |
-| ALB | Load balancer | ~$18 |
+| NLB (Traefik frontend) | Load balancer | ~$10 |
 | EBS (node root volumes) | Storage | ~$3–5 |
 | S3 Gateway endpoint | VPC Endpoint | Free |
-| **Total** | | **~$107–132/mo** |
+| **Total** | | **~$99–124/mo** |
 
 Optional additions:
 
