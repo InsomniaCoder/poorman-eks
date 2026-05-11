@@ -36,7 +36,16 @@ module "eks" {
   eks_managed_node_groups = {
     system = {
       name           = "system"
-      instance_types = ["t4g.small"]
+      # Multiple instance types to reduce spot eviction risk.
+      # All arm64, ~2 vCPU / 2-4 GB — sized for system pods (Karpenter, CoreDNS, Traefik).
+      # EKS MNG picks the cheapest available from this pool.
+      instance_types = [
+        "t4g.small",   # 2 vCPU, 2 GB — baseline, cheapest
+        "t4g.medium",  # 2 vCPU, 4 GB — same family, more RAM headroom
+        "m6g.medium",  # 1 vCPU, 4 GB — Graviton2, good RAM/cost ratio
+        "m7g.medium",  # 1 vCPU, 4 GB — Graviton3, slightly better perf than m6g
+        "c6g.medium",  # 1 vCPU, 2 GB — compute-optimised fallback
+      ]
       capacity_type  = "SPOT"
       ami_type       = "AL2023_ARM_64_STANDARD"
 
