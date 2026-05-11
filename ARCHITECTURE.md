@@ -101,13 +101,23 @@ The fck-nat instance runs on spot, meaning AWS can reclaim it with a 2-minute no
 
 ---
 
-### System node: spot t4g.small via managed node group
+### System node: spot 2 vCPU / 4 GB via managed node group
 
-Karpenter, CoreDNS, and Traefik run on a single `t4g.small` spot instance managed by an **EKS Managed Node Group (MNG)**, not on Fargate and not provisioned by Karpenter.
+Karpenter, CoreDNS, and Traefik run on a single spot node managed by an **EKS Managed Node Group (MNG)**, not on Fargate and not provisioned by Karpenter.
+
+The MNG uses a pool of **2 vCPU / 4 GB arm64** instance types. EKS MNG requires all instances in the pool to have identical vCPU and RAM so Kubernetes scheduling remains predictable — a pod's resource requests are evaluated against a consistent node capacity.
+
+| Instance | vCPU | RAM | Notes |
+|---|---|---|---|
+| `t4g.medium` | 2 | 4 GB | Graviton2 burstable, baseline |
+| `c6g.large` | 2 | 4 GB | Graviton2 compute-optimised |
+| `c7g.large` | 2 | 4 GB | Graviton3 compute-optimised |
+
+Three types in the pool significantly reduces eviction probability vs a single type. The 4 GB RAM (vs 2 GB on t4g.small) provides headroom for Karpenter + CoreDNS + Traefik co-located on the same node without OOM risk.
 
 **Why not Fargate for system pods?**
 
-Fargate bills per pod with a minimum of 0.25 vCPU / 0.5 GB per pod. Running 3–5 system pods on Fargate costs ~$30–40/mo. A `t4g.small` spot node covers all system pods for ~$4–5/mo with headroom.
+Fargate bills per pod with a minimum of 0.25 vCPU / 0.5 GB per pod. Running 3–5 system pods on Fargate costs ~$30–40/mo. A spot node from this pool covers all system pods for ~$5–8/mo.
 
 **Why not let Karpenter manage its own node?**
 
@@ -115,7 +125,7 @@ There is a chicken-and-egg problem: if Karpenter's node gets evicted, Karpenter 
 
 **Why spot is safe here (with a MNG):**
 
-During the ~2 minutes a replacement system node is booting, existing workload pods continue running. Only new pod scheduling is paused (no Karpenter, no CoreDNS for new lookups). For a cost-optimized cluster this is an acceptable tradeoff — on-demand would cost ~$12/mo for the same node, saving only ~$7–8/mo over spot with no meaningful reliability improvement in a single-AZ setup.
+During the ~2 minutes a replacement system node is booting, existing workload pods continue running. Only new pod scheduling is paused (no Karpenter, no CoreDNS for new lookups). For a cost-optimized cluster this is an acceptable tradeoff — on-demand t4g.medium would cost ~$15/mo, saving only ~$7–10/mo over spot with no meaningful reliability improvement in a single-AZ setup.
 
 ---
 
@@ -212,12 +222,12 @@ Estimates based on `eu-west-1` (Ireland) pricing, single AZ, light workload.
 |---|---|---|
 | EKS control plane | Fixed | $72 |
 | fck-nat (t4g.nano spot) | Spot EC2 | ~$1–2 |
-| System node (t4g.small spot, MNG) | Spot EC2 | ~$4–5 |
+| System node (2vCPU/4GB spot, MNG) | Spot EC2 | ~$5–8 |
 | Workload nodes (Karpenter spot) | Spot EC2 | ~$10–30 (varies) |
 | NLB (Traefik frontend) | Load balancer | ~$10 |
 | EBS (node root volumes) | Storage | ~$3–5 |
 | S3 Gateway endpoint | VPC Endpoint | Free |
-| **Total** | | **~$99–124/mo** |
+| **Total** | | **~$101–128/mo** |
 
 Optional additions:
 
@@ -227,7 +237,7 @@ Optional additions:
 | ECR endpoints only | +~$16 | Saturating fck-nat bandwidth on image pulls |
 | Upgrade fck-nat to t4g.small | +~$3 | Cheaper alternative to ECR endpoints for bandwidth |
 | NAT Gateway instead of fck-nat | +~$35 base + data | Fully managed NAT, no eviction risk |
-| System node on-demand | +~$7–8 | Eliminate system node spot eviction risk |
+| System node on-demand (t4g.medium) | +~$7–10 | Eliminate system node spot eviction risk |
 
 ---
 

@@ -32,4 +32,4 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design, cost breakdown, an
 
 ## Cost estimate
 
-> ~$99–124/mo for a minimal working cluster (eu-west-1), including the free S3 Gateway endpoint. See [ARCHITECTURE.md](./ARCHITECTURE.md) for a full breakdown and optional cost additions.
+> ~$101–128/mo for a minimal working cluster (eu-west-1), including the free S3 Gateway endpoint. See [ARCHITECTURE.md](./ARCHITECTURE.md) for a full breakdown and optional cost additions.
