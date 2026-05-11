@@ -41,6 +41,18 @@
                          Single AZ
 ```
 
+## Principles
+
+### Graviton first
+
+All EC2 instances in this architecture use AWS Graviton (arm64) by default. Graviton instances offer the best price-to-performance ratio in every instance family — typically 20% cheaper than equivalent x86 instances at the same or better performance.
+
+This applies to every layer: the fck-nat instance, the system managed node group, and all Karpenter-provisioned workload nodes. Any instance type added to this setup should default to a Graviton variant (`t4g`, `m7g`, `c7g`, `r7g`, etc.) unless there is a specific workload requirement that x86 cannot be avoided.
+
+The only common reason to allow x86 is third-party software that does not publish arm64 container images. In that case, use a mixed `nodeSelector` or `nodeAffinity` to pin only those workloads to x86 nodes, keeping everything else on Graviton.
+
+---
+
 ## Key decisions
 
 ### Single Availability Zone
@@ -115,26 +127,46 @@ Spot instances are ~60–90% cheaper than on-demand. Combined with Graviton's ~2
 
 ---
 
-### VPC Endpoints (optional, not deployed by default)
+### VPC Endpoints
 
-Instead of routing AWS API traffic through the fck-nat instance, you can deploy VPC Interface Endpoints to give nodes direct private access to AWS services. This removes AWS service traffic from the NAT path entirely.
+#### S3 Gateway endpoint (enabled by default)
 
-| Endpoint | Type | Cost |
+The S3 Gateway endpoint is always enabled. It is free, requires no interface ENI, and routes all S3 traffic (including ECR image layer storage) directly within the AWS network without touching fck-nat. There is no reason not to enable it.
+
+#### Interface endpoints (optional, disabled by default)
+
+Additional VPC Interface Endpoints for ECR, STS, EC2, and CloudWatch can be enabled via the `enable_vpc_endpoints` flag. Each endpoint costs a fixed ~$8/mo in eu-west-1 ($0.011/hr per AZ), regardless of traffic volume.
+
+> **Important:** Unlike AWS NAT Gateway, fck-nat does **not** charge per-GB processed. The cost of routing AWS API traffic through fck-nat is zero beyond the instance cost itself. Interface endpoints therefore do not reduce your bill — they trade a fixed monthly cost for two specific benefits: reliability (AWS service calls survive a fck-nat eviction) and bandwidth headroom (ECR image pulls no longer compete with other outbound traffic on the t4g.nano).
+
+**When interface endpoints are worth it:**
+
+| Scenario | Verdict |
+|---|---|
+| Low image pull frequency, occasional deploys | Not worth it — fck-nat handles it fine |
+| High churn workloads (many pods starting/stopping, large images) | Worth it for ECR — relieves fck-nat bandwidth |
+| fck-nat running on-demand (eviction not a concern) | Not worth it for reliability, only for bandwidth |
+| Zero-egress security posture required | Worth it — enables full internet lockdown |
+
+**Cost breakdown if enabled:**
+
+| Endpoint | Type | Cost/mo |
 |---|---|---|
-| S3 | Gateway | **Free** |
-| ECR API | Interface | ~$8/mo |
-| ECR DKR | Interface | ~$8/mo |
-| EC2 | Interface | ~$8/mo |
-| STS | Interface | ~$8/mo |
-| CloudWatch Logs | Interface | ~$8/mo |
-| **Total** | | **~$32–40/mo** |
+| S3 | Gateway | **Free** (always on) |
+| ECR API | Interface | ~$8 |
+| ECR DKR | Interface | ~$8 |
+| EC2 | Interface | ~$8 |
+| STS | Interface | ~$8 |
+| CloudWatch Logs | Interface | ~$8 |
+| **All endpoints total** | | **~$40/mo** |
 
-VPC Endpoints make sense when:
-- You want to eliminate the fck-nat spot eviction risk for AWS service calls
-- Your workloads pull many large container images (avoiding NAT data processing)
-- You are moving toward a zero-internet-access posture
+**Bandwidth comparison — fck-nat vs endpoint for ECR:**
 
-VPC Endpoints do **not** replace fck-nat if your workloads need to reach the public internet (Docker Hub, GitHub, external APIs). In that case both can coexist: AWS traffic goes via endpoints, everything else via fck-nat.
+A t4g.nano sustains ~600 Mbps real-world throughput for NAT workloads despite the 5 Gbps headline. A cluster pulling many large images simultaneously (e.g. a rollout restarting 20 pods with 2 GB images each) can saturate this. An ECR Interface Endpoint removes image pull traffic from the fck-nat path entirely, leaving full fck-nat capacity for public internet traffic.
+
+If this is a concern, upgrading fck-nat to a `t4g.small` (~$5/mo spot) is cheaper than adding the two ECR endpoints (~$16/mo) unless you also need the reliability benefit.
+
+Interface endpoints do **not** replace fck-nat for public internet access (Docker Hub, GitHub, external APIs). Both can coexist: AWS service traffic routes via endpoints, everything else via fck-nat.
 
 ---
 
@@ -150,9 +182,18 @@ Estimates based on `eu-west-1` (Ireland) pricing, single AZ, light workload.
 | Workload nodes (Karpenter spot) | Spot EC2 | ~$10–30 (varies) |
 | ALB | Load balancer | ~$18 |
 | EBS (node root volumes) | Storage | ~$3–5 |
+| S3 Gateway endpoint | VPC Endpoint | Free |
 | **Total** | | **~$107–132/mo** |
 
-Replacing fck-nat with AWS NAT Gateway would add ~$35/mo base + data transfer costs. Replacing the spot system node with on-demand would add ~$7–8/mo. Replacing it with Fargate pods would add ~$25–35/mo. None of these changes improve reliability meaningfully in a single-AZ setup.
+Optional additions:
+
+| Addition | Extra cost/mo | When to consider |
+|---|---|---|
+| All interface endpoints | +~$40 | High image churn or zero-egress posture |
+| ECR endpoints only | +~$16 | Saturating fck-nat bandwidth on image pulls |
+| Upgrade fck-nat to t4g.small | +~$3 | Cheaper alternative to ECR endpoints for bandwidth |
+| NAT Gateway instead of fck-nat | +~$35 base + data | Fully managed NAT, no eviction risk |
+| System node on-demand | +~$7–8 | Eliminate system node spot eviction risk |
 
 ---
 
